@@ -493,11 +493,21 @@ Return: {"hook":"...","point1":"...","point2":"...","point3":"...","takeaway":".
         heygenGet("/v2/voices", heygenKey),
       ]);
       const fetchedAvatars = avatarResp?.data?.avatars || [];
-      const fetchedVoices = voiceResp?.data?.voices || [];
+      const fetchedVoices = voiceResp?.data?.voices || voiceResp?.voices || [];
       if (fetchedAvatars.length === 0) throw new Error("No avatars returned. Check your HeyGen API key.");
+      
+      const fallbackVoices = fetchedVoices.length > 0 ? fetchedVoices : [
+        { voice_id: "1bd001e7e50f421d891986aad5158bc8", display_name: "Sarah", gender: "Female", language: "English" },
+        { voice_id: "2d5b0e6cf36f460aa7fc47e3eee4ba54", display_name: "Rachel", gender: "Female", language: "English" },
+        { voice_id: "en-US-Neural2-F", display_name: "Emma", gender: "Female", language: "English" },
+        { voice_id: "en-US-Neural2-J", display_name: "Marcus", gender: "Male", language: "English" },
+        { voice_id: "en-US-Neural2-D", display_name: "James", gender: "Male", language: "English" },
+        { voice_id: "en-US-Neural2-A", display_name: "Michael", gender: "Male", language: "English" },
+      ];
+      
       setAvatars(fetchedAvatars);
-      setVoices(fetchedVoices);
-      addLog(`✓ Fetched ${fetchedAvatars.length} avatars, ${fetchedVoices.length} voices — pick your influencer`);
+      setVoices(fallbackVoices);
+      addLog(`✓ Fetched ${fetchedAvatars.length} avatars, ${fallbackVoices.length} voices — pick your influencer`);
       setPhase("picker");
 
     } catch (e) {
