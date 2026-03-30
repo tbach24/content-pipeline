@@ -7,7 +7,7 @@ const callClaude = async (system, user) => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": "PASTE KEY HERE",
+      "x-api-key": "PASTE HEY GEN API KEY HERE",
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
     },
@@ -104,6 +104,19 @@ function AvatarPicker({ avatars, voices, onConfirm, onCancel }) {
   const [selAvatar, setSelAvatar] = useState(avatars[0]);
   const [selVoice, setSelVoice] = useState(voices[0]);
   const [search, setSearch] = useState("");
+  const [voiceSearch, setVoiceSearch] = useState("");
+  const [voiceGender, setVoiceGender] = useState("all");
+  const [voiceLang, setVoiceLang] = useState("all");
+
+  const languages = ["all", ...new Set(voices.map(v => v.language).filter(Boolean))].slice(0, 20);
+
+  const filteredVoices = voices.filter(v => {
+    const name = (v.display_name || v.name || "").toLowerCase();
+    const matchSearch = name.includes(voiceSearch.toLowerCase());
+    const matchGender = voiceGender === "all" || (v.gender || "").toLowerCase() === voiceGender;
+    const matchLang = voiceLang === "all" || v.language === voiceLang;
+    return matchSearch && matchGender && matchLang;
+  });
 
   const filtered = avatars.filter(a =>
     (a.avatar_name || a.name || "").toLowerCase().includes(search.toLowerCase())
@@ -156,12 +169,52 @@ function AvatarPicker({ avatars, voices, onConfirm, onCancel }) {
           <div style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-secondary)", fontFamily: "var(--font-sans)", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}>
             Voice
           </div>
-          <select value={selVoice?.voice_id || ""} onChange={e => setSelVoice(voices.find(v => v.voice_id === e.target.value))}
-            style={{ width: "100%", padding: "10px 12px", fontFamily: "var(--font-sans)", fontSize: 13, marginBottom: 4 }}>
-            {voices.map(v => (
-              <option key={v.voice_id} value={v.voice_id}>{v.display_name || v.name} {v.language ? `· ${v.language}` : ""} {v.gender ? `· ${v.gender}` : ""}</option>
-            ))}
-          </select>
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <input value={voiceSearch} onChange={e => setVoiceSearch(e.target.value)}
+              placeholder="Search voices…"
+              style={{ flex: 1, padding: "7px 10px", fontFamily: "var(--font-sans)", fontSize: 12 }} />
+            <select value={voiceGender} onChange={e => setVoiceGender(e.target.value)}
+              style={{ padding: "7px 10px", fontFamily: "var(--font-sans)", fontSize: 12 }}>
+              <option value="all">All genders</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+            </select>
+            <select value={voiceLang} onChange={e => setVoiceLang(e.target.value)}
+              style={{ padding: "7px 10px", fontFamily: "var(--font-sans)", fontSize: 12 }}>
+              {languages.map(l => <option key={l} value={l}>{l === "all" ? "All languages" : l}</option>)}
+            </select>
+          </div>
+
+          <div style={{ maxHeight: 180, overflowY: "auto", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)" }}>
+            {filteredVoices.length === 0 && (
+              <div style={{ padding: "12px", fontSize: 12, color: "var(--color-text-tertiary)", fontFamily: "var(--font-sans)", textAlign: "center" }}>No voices match your search</div>
+            )}
+            {filteredVoices.map(v => {
+              const selected = selVoice?.voice_id === v.voice_id;
+              return (
+                <div key={v.voice_id} onClick={() => setSelVoice(v)} style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  padding: "9px 12px", cursor: "pointer",
+                  background: selected ? "var(--color-background-info)" : "transparent",
+                  borderBottom: "0.5px solid var(--color-border-tertiary)",
+                  transition: "background 0.1s"
+                }}>
+                  <span style={{ fontSize: 13, fontFamily: "var(--font-sans)", fontWeight: selected ? 500 : 400, color: selected ? "var(--color-text-info)" : "var(--color-text-primary)" }}>
+                    {v.display_name || v.name}
+                  </span>
+                  <span style={{ fontSize: 11, color: selected ? "var(--color-text-info)" : "var(--color-text-tertiary)", fontFamily: "var(--font-sans)" }}>
+                    {[v.gender, v.language].filter(Boolean).join(" · ")}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {selVoice && (
+            <div style={{ fontSize: 12, color: "var(--color-text-secondary)", fontFamily: "var(--font-sans)", marginTop: 6 }}>
+              Selected: <strong>{selVoice.display_name || selVoice.name}</strong>
+            </div>
+          )}
         </div>
 
         <div style={{ padding: "14px 20px", borderTop: "0.5px solid var(--color-border-tertiary)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
