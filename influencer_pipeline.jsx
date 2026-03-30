@@ -7,12 +7,12 @@ const callClaude = async (system, user) => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": "PASTE ANTHROPIC KEY HERE",
+      "x-api-key": "API KEY HERE",
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-5-20251001",
+      model: "claude-sonnet-4-6",
       max_tokens: 2000,
       system,
       messages: [{ role: "user", content: user }],
