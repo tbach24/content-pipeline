@@ -7,7 +7,7 @@ const callClaude = async (system, user) => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": "PASTE HEY GEN API KEY HERE",
+      "x-api-key": "PASTE ANTHROPIC KEY HERE",
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
     },
