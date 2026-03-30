@@ -7,13 +7,13 @@ const callClaude = async (system, user) => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": "Paste Anthropic Key Here",
+      "x-api-key": "PASTE ANTHROPIC KEY HERE",
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-5-20251001",
-      max_tokens: 1000,
+      max_tokens: 2000,
       system,
       messages: [{ role: "user", content: user }],
     }),
@@ -457,9 +457,11 @@ export default function App() {
       setStepStatus(1, "running");
       addLog(`Mining ideas for "${nicheTopic}"…`);
       const ideasRaw = await callClaude(
-        "You are a viral content strategist. Return ONLY valid JSON, no markdown.",
-        `Generate 8 viral content ideas for the niche: "${nicheTopic}"${fbText ? `. User feedback: ${fbText}` : ""}.
-Return: {"ideas":[{"title":"...","angle":"...","potential":"High|Medium","reason":"..."}],"chosen":{"title":"...","angle":"...","potential":"High","reason":"..."}}`
+        "You are a viral content strategist. You must respond with ONLY a valid JSON object. No explanation, no markdown, no extra text. Just the raw JSON.",
+        `Generate 1 viral content idea for the niche: "${nicheTopic}"${fbText ? `. User feedback: ${fbText}` : ""}.
+Respond with ONLY this exact JSON structure:
+{"ideas":[{"title":"idea title","angle":"hook angle","potential":"High","reason":"why it works"}],"chosen":{"title":"idea title","angle":"hook angle","potential":"High","reason":"why it works"}}
+The "chosen" field must be the same as the single idea in the list.`
       );
       const ideasData = parseJSON(ideasRaw);
       if (!ideasData) throw new Error("Step 1: bad JSON from Claude");
