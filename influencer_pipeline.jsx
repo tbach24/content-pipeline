@@ -854,8 +854,6 @@ Return: {"viralScore":<1-10>,"scoreReason":"...","strengths":["...","...","..."]
                 "Claude builds a 7-day posting schedule across 4 platforms",
                 "Claude scores and optimizes — you approve or request changes",
               ].map((s, i) => (
-                "You approve or request changes — one click",
-              ].map((s, i) => (
                 <div key={i} style={{ display: "flex", gap: 10, padding: "5px 0", fontSize: 13, color: "var(--color-text-secondary)", fontFamily: "var(--font-sans)" }}>
                   <span style={{ color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)", minWidth: 16 }}>{i + 1}</span>
                   <span>{s}</span>
