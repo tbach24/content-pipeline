@@ -411,22 +411,44 @@ const STEPS = [
 ];
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
+
+const AVATAR_LIBRARY_KEY = "hg_avatar_library";
+
+const loadAvatarLibrary = () => {
+  try { return JSON.parse(localStorage.getItem(AVATAR_LIBRARY_KEY) || "[]"); } catch { return []; }
+};
+
+const saveAvatarToLibrary = (avatar) => {
+  try {
+    const lib = loadAvatarLibrary();
+    const exists = lib.find(a => a.talkingPhotoId === avatar.talkingPhotoId);
+    if (!exists) {
+      lib.unshift({ ...avatar, savedAt: new Date().toISOString() });
+      localStorage.setItem(AVATAR_LIBRARY_KEY, JSON.stringify(lib));
+    }
+    return lib;
+  } catch { return []; }
+};
+
 export default function App() {
   const [heygenKey, setHeygenKey] = useState("");
   const [niche, setNiche] = useState("");
-  const [phase, setPhase] = useState("input"); // input | running | picker | review | approved | revising
+  const [phase, setPhase] = useState("input"); // input | running | review | approved | revising | library
   const [stepStatuses, setStepStatuses] = useState({ 1: "idle", 2: "idle", 3: "idle", 4: "idle", 5: "idle" });
   const [results, setResults] = useState({});
   const [log, setLog] = useState([]);
   const [error, setError] = useState(null);
   const [feedback, setFeedback] = useState("");
+  const [avatarLibrary, setAvatarLibrary] = useState(loadAvatarLibrary);
+  const [useExistingAvatar, setUseExistingAvatar] = useState(false);
+  const [selectedLibraryAvatar, setSelectedLibraryAvatar] = useState(null);
 
   // HeyGen video state
   const [avatars, setAvatars] = useState([]);
   const [voices, setVoices] = useState([]);
   const [chosenAvatar, setChosenAvatar] = useState(null);
   const [chosenVoice, setChosenVoice] = useState(null);
-  const [videoStatus, setVideoStatus] = useState(null); // null | pending | processing | completed | failed
+  const [videoStatus, setVideoStatus] = useState(null);
   const [videoUrl, setVideoUrl] = useState(null);
   const [videoId, setVideoId] = useState(null);
 
@@ -442,7 +464,7 @@ export default function App() {
   const setStepStatus = (id, s) => setStepStatuses(prev => ({ ...prev, [id]: s }));
 
   // ── Run pipeline steps 1, 2 (pause for avatar picker), then 4, 5 ────────────
-  const runPipelinePhase1 = async (nicheTopic, fbText = "") => {
+  const runPipelinePhase1 = async (nicheTopic, fbText = "", existingAvatar = null) => {
     setError(null);
     setResults({});
     setVideoStatus(null);
@@ -484,31 +506,115 @@ Return: {"hook":"...","point1":"...","point2":"...","point3":"...","takeaway":".
       pendingResults.current = { ...pendingResults.current, script };
       setResults(r => ({ ...r, script }));
       setStepStatus(2, "done");
-      addLog("✓ Script ready — fetching HeyGen avatars…");
 
-      // Fetch avatars and voices for picker
+      // If reusing an existing avatar, skip generation entirely
+      if (existingAvatar) {
+        addLog(`✓ Script ready — reusing saved avatar: ${existingAvatar.name}`);
+        setStepStatus(3, "done");
+        pendingResults.current = { ...pendingResults.current, avatarDesign: existingAvatar, talkingPhotoId: existingAvatar.talkingPhotoId };
+        setResults(r => ({ ...r, avatarDesign: existingAvatar }));
+        await runVideoAndSchedule(existingAvatar.talkingPhotoId, existingAvatar.voiceId, existingAvatar.name, script);
+        return;
+      }
+
+      addLog("✓ Script ready — designing unique avatar…");
+
+      // Step 3: Auto-generate unique avatar
       setStepStatus(3, "running");
-      const [avatarResp, voiceResp] = await Promise.all([
-        heygenGet("/v2/avatars", heygenKey),
-        heygenGet("/v2/voices", heygenKey),
-      ]);
-      const fetchedAvatars = avatarResp?.data?.avatars || [];
-      const fetchedVoices = voiceResp?.data?.voices || voiceResp?.voices || [];
-      if (fetchedAvatars.length === 0) throw new Error("No avatars returned. Check your HeyGen API key.");
-      
-      const fallbackVoices = fetchedVoices.length > 0 ? fetchedVoices : [
-        { voice_id: "1bd001e7e50f421d891986aad5158bc8", display_name: "Sarah", gender: "Female", language: "English" },
-        { voice_id: "2d5b0e6cf36f460aa7fc47e3eee4ba54", display_name: "Rachel", gender: "Female", language: "English" },
-        { voice_id: "en-US-Neural2-F", display_name: "Emma", gender: "Female", language: "English" },
-        { voice_id: "en-US-Neural2-J", display_name: "Marcus", gender: "Male", language: "English" },
-        { voice_id: "en-US-Neural2-D", display_name: "James", gender: "Male", language: "English" },
-        { voice_id: "en-US-Neural2-A", display_name: "Michael", gender: "Male", language: "English" },
-      ];
-      
-      setAvatars(fetchedAvatars);
-      setVoices(fallbackVoices);
-      addLog(`✓ Fetched ${fetchedAvatars.length} avatars, ${fallbackVoices.length} voices — pick your influencer`);
-      setPhase("picker");
+
+      // Claude designs the avatar persona
+      const avatarDesignRaw = await callClaude(
+        "You are a creative director designing unique AI influencer avatars. Return ONLY valid JSON, no markdown, no extra text.",
+        `Design a unique influencer avatar for the niche: "${nicheTopic}".
+Return ONLY this JSON (no other text):
+{"name":"FirstName","age":"Young Adult","gender":"Woman","ethnicity":"e.g. African American","pose":"half_body","style":"Realistic","appearance":"detailed description of person clothing background and expression relevant to ${nicheTopic}","voiceId":"e5a2359d1d564a3d801f6ca073d72acf"}`
+      );
+      const avatarDesign = parseJSON(avatarDesignRaw);
+      if (!avatarDesign) throw new Error("Step 3: Could not design avatar");
+      addLog(`✓ Designed: ${avatarDesign.name}, ${avatarDesign.gender}, ${avatarDesign.ethnicity}`);
+
+      // Generate avatar photo
+      addLog("Generating avatar face with HeyGen…");
+      const genResp = await heygenPost("/v2/photo_avatar/photo/generate", heygenKey, {
+        name: avatarDesign.name,
+        age: avatarDesign.age,
+        gender: avatarDesign.gender,
+        ethnicity: avatarDesign.ethnicity,
+        orientation: "vertical",
+        pose: avatarDesign.pose,
+        style: avatarDesign.style,
+        appearance: avatarDesign.appearance,
+      });
+      const generationId = genResp?.data?.generation_id;
+      if (!generationId) throw new Error("HeyGen avatar generation failed. Check API key and credits.");
+      addLog(`Avatar generating — polling…`);
+
+      // Poll for photo
+      let photoData = null;
+      for (let i = 0; i < 24; i++) {
+        await sleep(5000);
+        const sr = await heygenGet(`/v2/photo_avatar/generation/${generationId}`, heygenKey);
+        const st = sr?.data?.status;
+        addLog(`Photo poll ${i + 1}: ${st}`);
+        if (st === "success" || st === "completed") { photoData = sr?.data; break; }
+        if (st === "failed") throw new Error("Avatar photo generation failed.");
+      }
+      if (!photoData) throw new Error("Avatar photo timed out.");
+      const imageKey = photoData?.image_key || photoData?.images?.[0]?.image_key;
+      if (!imageKey) throw new Error("No image key from HeyGen.");
+      addLog("✓ Photo ready — creating avatar group…");
+
+      // Create avatar group
+      const groupResp = await heygenPost("/v2/photo_avatar/avatar_group/create", heygenKey, {
+        name: `${avatarDesign.name} — ${nicheTopic}`,
+        image_key: imageKey,
+        generation_id: generationId,
+      });
+      const groupId = groupResp?.data?.group_id;
+      if (!groupId) throw new Error("Failed to create avatar group.");
+      addLog("✓ Group created — training avatar…");
+
+      // Train avatar
+      await heygenPost("/v2/photo_avatar/train", heygenKey, { group_id: groupId });
+
+      // Poll for training
+      let talkingPhotoId = null;
+      for (let i = 0; i < 24; i++) {
+        await sleep(5000);
+        const tr = await heygenGet(`/v2/photo_avatar/train/status/${groupId}`, heygenKey);
+        const st = tr?.data?.status;
+        addLog(`Training poll ${i + 1}: ${st}`);
+        if (st === "success" || st === "completed") {
+          const lr = await heygenGet(`/v2/photo_avatar/avatar_group/${groupId}`, heygenKey);
+          talkingPhotoId = lr?.data?.avatars?.[0]?.id || lr?.data?.looks?.[0]?.id;
+          break;
+        }
+        if (st === "failed") throw new Error("Avatar training failed.");
+      }
+      if (!talkingPhotoId) throw new Error("Could not get trained avatar ID.");
+      addLog(`✓ Avatar "${avatarDesign.name}" ready!`);
+
+      // Save to local library for reuse
+      const avatarEntry = {
+        talkingPhotoId,
+        name: avatarDesign.name,
+        niche: nicheTopic,
+        gender: avatarDesign.gender,
+        ethnicity: avatarDesign.ethnicity,
+        age: avatarDesign.age,
+        appearance: avatarDesign.appearance,
+        voiceId: avatarDesign.voiceId,
+        groupId,
+      };
+      const updatedLib = saveAvatarToLibrary(avatarEntry);
+      setAvatarLibrary(updatedLib);
+      addLog(`✓ Avatar saved to library (${updatedLib.length} total)`);
+
+      pendingResults.current = { ...pendingResults.current, avatarDesign, talkingPhotoId };
+      setResults(r => ({ ...r, avatarDesign }));
+
+      // Kick off video + schedule automatically
+      await runVideoAndSchedule(talkingPhotoId, avatarDesign.voiceId, avatarDesign.name, script);
 
     } catch (e) {
       setError(e.message);
@@ -517,23 +623,16 @@ Return: {"hook":"...","point1":"...","point2":"...","point3":"...","takeaway":".
     }
   };
 
-  const runPipelinePhase2 = async (avatar, voice, script) => {
-    setChosenAvatar(avatar);
-    setChosenVoice(voice);
+  const runVideoAndSchedule = async (talkingPhotoId, voiceId, avatarName, script) => {
     setPhase("running");
     setVideoStatus("pending");
-
-    const avatarId = avatar.avatar_id || avatar.id;
-    const voiceId = voice.voice_id;
-    const avatarName = avatar.avatar_name || avatar.name || avatarId;
-    const voiceName = voice.display_name || voice.name || voiceId;
     const spokenText = script.fullText || `${script.hook} ${script.point1} ${script.point2} ${script.point3} ${script.takeaway}`;
 
     try {
-      addLog(`Submitting to HeyGen — avatar: ${avatarName}, voice: ${voiceName}…`);
+      addLog(`Generating video with avatar: ${avatarName}…`);
       const createResp = await heygenPost("/v2/video/generate", heygenKey, {
         video_inputs: [{
-          character: { type: "avatar", avatar_id: avatarId, avatar_style: "normal" },
+          character: { type: "talking_photo", talking_photo_id: talkingPhotoId },
           voice: { type: "text", input_text: spokenText, voice_id: voiceId },
           background: { type: "color", value: "#f5f5f0" },
         }],
@@ -542,11 +641,10 @@ Return: {"hook":"...","point1":"...","point2":"...","point3":"...","takeaway":".
       });
 
       const vid = createResp?.data?.video_id;
-      if (!vid) throw new Error("HeyGen did not return a video_id. Check your API key and account credits.");
+      if (!vid) throw new Error("HeyGen did not return a video_id. Check API key and credits.");
       setVideoId(vid);
-      addLog(`✓ Video submitted — id: ${vid} — polling…`);
+      addLog(`Video submitted — id: ${vid} — polling…`);
 
-      // Poll for completion
       let attempts = 0;
       while (attempts < 40) {
         await sleep(10000);
@@ -554,21 +652,18 @@ Return: {"hook":"...","point1":"...","point2":"...","point3":"...","takeaway":".
         const statusResp = await heygenGet(`/v1/video_status.get?video_id=${vid}`, heygenKey);
         const st = statusResp?.data?.status;
         setVideoStatus(st);
-        addLog(`Poll ${attempts}: ${st}`);
+        addLog(`Video poll ${attempts}: ${st}`);
         if (st === "completed") {
-          const url = statusResp?.data?.video_url;
-          setVideoUrl(url);
+          setVideoUrl(statusResp?.data?.video_url);
           setStepStatus(3, "done");
-          addLog(`✓ Video ready!`);
+          addLog("✓ Video ready!");
           break;
         }
-        if (st === "failed") {
-          throw new Error("HeyGen video rendering failed.");
-        }
+        if (st === "failed") throw new Error("HeyGen video rendering failed.");
       }
       if (attempts >= 40) throw new Error("Video polling timed out (>6 min).");
 
-      // Step 4
+      // Step 4 — Schedule
       setStepStatus(4, "running");
       addLog("Building posting schedule…");
       const schedRaw = await callClaude(
@@ -584,7 +679,7 @@ Return: [{"day":1,"time":"HH:MM","platform":"...","caption":"under 150 chars","h
       setStepStatus(4, "done");
       addLog(`✓ ${schedule.length}-day schedule built`);
 
-      // Step 5
+      // Step 5 — Optimization
       setStepStatus(5, "running");
       addLog("Running viral optimization…");
       const chosen = pendingResults.current.chosen;
@@ -605,7 +700,6 @@ Return: {"viralScore":<1-10>,"scoreReason":"...","strengths":["...","...","..."]
       setResults(r => ({ ...r, opt }));
       setStepStatus(5, "done");
       addLog(`✓ Viral score: ${opt.viralScore}/10 — pipeline complete`);
-
       setPhase("review");
 
     } catch (e) {
@@ -620,12 +714,12 @@ Return: {"viralScore":<1-10>,"scoreReason":"...","strengths":["...","...","..."]
     if (!niche.trim() || !heygenKey.trim()) return;
     pendingNiche.current = niche.trim();
     pendingFeedback.current = "";
-    runPipelinePhase1(niche.trim());
-  };
-
-  const handleAvatarConfirm = (avatar, voice) => {
-    setPhase("running");
-    runPipelinePhase2(avatar, voice, pendingResults.current.script);
+    if (useExistingAvatar && selectedLibraryAvatar) {
+      // Skip avatar generation, go straight to video
+      runPipelinePhase1(niche.trim(), "", selectedLibraryAvatar);
+    } else {
+      runPipelinePhase1(niche.trim());
+    }
   };
 
   const handleRevise = () => setPhase("revising");
@@ -662,19 +756,12 @@ Return: {"viralScore":<1-10>,"scoreReason":"...","strengths":["...","...","..."]
         @keyframes pulse { 0%,100%{opacity:.2} 50%{opacity:1} }
       `}</style>
 
-      {phase === "picker" && avatars.length > 0 && (
-        <AvatarPicker
-          avatars={avatars}
-          voices={voices}
-          onConfirm={handleAvatarConfirm}
-          onCancel={() => { setPhase("input"); addLog("Avatar selection cancelled."); }}
-        />
-      )}
+      {phase === "picker" && null}
 
       <div style={{ maxWidth: 780, margin: "0 auto", padding: "2.5rem 1rem" }}>
         <div style={{ marginBottom: "2rem" }}>
           <h1 style={{ fontSize: 24, fontWeight: 500, margin: "0 0 4px", letterSpacing: "-0.3px" }}>Influencer Content Pipeline</h1>
-          <p style={{ fontSize: 13, color: "var(--color-text-secondary)", margin: 0 }}>AI mines ideas → writes script → generates your talking-head video → builds schedule → you approve</p>
+          <p style={{ fontSize: 13, color: "var(--color-text-secondary)", margin: 0 }}>AI mines idea → writes script → generates unique avatar → creates video → builds schedule → you approve</p>
         </div>
 
         {/* INPUT */}
@@ -698,7 +785,7 @@ Return: {"viralScore":<1-10>,"scoreReason":"...","strengths":["...","...","..."]
                 style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px", fontSize: 14 }} />
             </div>
 
-            <button onClick={handleStart} disabled={!niche.trim() || !heygenKey.trim()} style={{
+            <button onClick={handleStart} disabled={!niche.trim() || !heygenKey.trim() || (useExistingAvatar && !selectedLibraryAvatar)} style={{
               padding: "11px 28px",
               background: niche.trim() && heygenKey.trim() ? "var(--color-text-primary)" : "var(--color-background-secondary)",
               color: niche.trim() && heygenKey.trim() ? "var(--color-background-primary)" : "var(--color-text-tertiary)",
@@ -707,17 +794,66 @@ Return: {"viralScore":<1-10>,"scoreReason":"...","strengths":["...","...","..."]
               Run full pipeline →
             </button>
 
+            {avatarLibrary.length > 0 && (
+              <div style={{ marginTop: 20, padding: "14px 16px", borderRadius: "var(--border-radius-md)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: useExistingAvatar ? 12 : 0 }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500, fontFamily: "var(--font-sans)" }}>Avatar library ({avatarLibrary.length} saved)</div>
+                    <div style={{ fontSize: 11, color: "var(--color-text-secondary)", fontFamily: "var(--font-sans)", marginTop: 2 }}>Reuse a saved avatar instead of generating a new one</div>
+                  </div>
+                  <button onClick={() => { setUseExistingAvatar(!useExistingAvatar); setSelectedLibraryAvatar(null); }} style={{
+                    padding: "6px 14px", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+                    background: useExistingAvatar ? "var(--color-text-primary)" : "transparent",
+                    color: useExistingAvatar ? "var(--color-background-primary)" : "var(--color-text-primary)",
+                    fontSize: 12, cursor: "pointer", fontFamily: "var(--font-sans)", fontWeight: 500
+                  }}>
+                    {useExistingAvatar ? "Using saved" : "Use saved avatar"}
+                  </button>
+                </div>
+
+                {useExistingAvatar && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+                    {avatarLibrary.map((av, i) => (
+                      <div key={i} onClick={() => setSelectedLibraryAvatar(av)} style={{
+                        display: "flex", justifyContent: "space-between", alignItems: "center",
+                        padding: "10px 12px", borderRadius: "var(--border-radius-md)", cursor: "pointer",
+                        background: selectedLibraryAvatar?.talkingPhotoId === av.talkingPhotoId ? "var(--color-background-info)" : "var(--color-background-primary)",
+                        border: selectedLibraryAvatar?.talkingPhotoId === av.talkingPhotoId ? "2px solid var(--color-border-info)" : "0.5px solid var(--color-border-tertiary)",
+                        transition: "all 0.15s"
+                      }}>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 500, fontFamily: "var(--font-sans)", color: selectedLibraryAvatar?.talkingPhotoId === av.talkingPhotoId ? "var(--color-text-info)" : "var(--color-text-primary)" }}>{av.name}</div>
+                          <div style={{ fontSize: 11, color: "var(--color-text-secondary)", fontFamily: "var(--font-sans)", marginTop: 1 }}>{av.gender} · {av.ethnicity} · created for: {av.niche}</div>
+                        </div>
+                        <button onClick={(e) => {
+                          e.stopPropagation();
+                          const updated = avatarLibrary.filter((_, idx) => idx !== i);
+                          localStorage.setItem(AVATAR_LIBRARY_KEY, JSON.stringify(updated));
+                          setAvatarLibrary(updated);
+                          if (selectedLibraryAvatar?.talkingPhotoId === av.talkingPhotoId) setSelectedLibraryAvatar(null);
+                        }} style={{ fontSize: 11, color: "var(--color-text-danger)", background: "transparent", border: "none", cursor: "pointer", fontFamily: "var(--font-sans)", padding: "2px 6px" }}>
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {error && <div style={{ marginTop: 14, fontSize: 13, color: "var(--color-text-danger)" }}>{error}</div>}
 
             <div style={{ marginTop: 24, paddingTop: 20, borderTop: "0.5px solid var(--color-border-tertiary)" }}>
-              <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 10 }}>What happens</div>
+              <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 10 }}>What happens — fully automatic</div>
               {[
-                "Claude mines 8+ viral content ideas and picks the best",
-                "Claude writes a full talking-head script (hook, 3 points, takeaway)",
-                "You pick an avatar + voice from your HeyGen library",
-                "HeyGen renders a realistic influencer video, captioned",
+                "Claude generates a viral content idea for your niche",
+                "Claude writes a full talking-head script",
+                "Claude designs a unique avatar persona (age, look, style)",
+                "HeyGen generates the avatar face from scratch — unique every time",
+                "HeyGen trains and animates it speaking your script",
                 "Claude builds a 7-day posting schedule across 4 platforms",
-                "Claude gives you a viral score + optimization report",
+                "Claude scores and optimizes — you approve or request changes",
+              ].map((s, i) => (
                 "You approve or request changes — one click",
               ].map((s, i) => (
                 <div key={i} style={{ display: "flex", gap: 10, padding: "5px 0", fontSize: 13, color: "var(--color-text-secondary)", fontFamily: "var(--font-sans)" }}>
@@ -779,13 +915,45 @@ Return: {"viralScore":<1-10>,"scoreReason":"...","strengths":["...","...","..."]
 
             <IdeasSection ideas={results.ideas} chosen={results.chosen} />
             <ScriptSection script={results.script} />
+
+            {/* Avatar Design Card */}
+            {results.avatarDesign && (
+              <div style={{ borderRadius: "var(--border-radius-lg)", border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)", overflow: "hidden", marginBottom: 16 }}>
+                <div style={{ padding: "11px 18px", borderBottom: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-secondary)", display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 3, height: 14, borderRadius: 2, background: "#BA7517", flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, fontWeight: 500, fontFamily: "var(--font-sans)" }}>Step 3 — AI-generated avatar</span>
+                </div>
+                <div style={{ padding: "16px 18px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
+                    {[
+                      { label: "Name", val: results.avatarDesign.name },
+                      { label: "Gender", val: results.avatarDesign.gender },
+                      { label: "Age", val: results.avatarDesign.age },
+                      { label: "Ethnicity", val: results.avatarDesign.ethnicity },
+                      { label: "Style", val: results.avatarDesign.style },
+                      { label: "Pose", val: results.avatarDesign.pose },
+                    ].map(f => (
+                      <div key={f.label} style={{ padding: "8px 10px", borderRadius: "var(--border-radius-md)", background: "var(--color-background-secondary)" }}>
+                        <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-sans)", marginBottom: 2 }}>{f.label}</div>
+                        <div style={{ fontSize: 13, fontFamily: "var(--font-sans)" }}>{f.val}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ padding: "10px 12px", borderRadius: "var(--border-radius-md)", background: "var(--color-background-secondary)" }}>
+                    <div style={{ fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-sans)", marginBottom: 3 }}>Appearance</div>
+                    <div style={{ fontSize: 13, fontFamily: "var(--font-sans)", lineHeight: 1.5 }}>{results.avatarDesign.appearance}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <VideoSection
               videoStatus={videoStatus}
               videoUrl={videoUrl}
-              avatarName={chosenAvatar?.avatar_name || chosenAvatar?.name}
-              voiceName={chosenVoice?.display_name || chosenVoice?.name}
-              onGenerate={() => { setPhase("picker"); }}
-              canGenerate={!!results.script}
+              avatarName={results.avatarDesign?.name}
+              voiceName={null}
+              onGenerate={() => {}}
+              canGenerate={false}
             />
             <ScheduleSection schedule={results.schedule} />
             <OptSection opt={results.opt} />
