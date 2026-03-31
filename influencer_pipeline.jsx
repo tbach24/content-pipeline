@@ -560,8 +560,26 @@ Return ONLY this JSON (no other text):
         if (st === "failed") throw new Error("Avatar photo generation failed.");
       }
       if (!photoData) throw new Error("Avatar photo timed out.");
-      const imageKey = photoData?.image_key || photoData?.images?.[0]?.image_key;
-      if (!imageKey) throw new Error("No image key from HeyGen.");
+
+      // Log full response to help debug key location
+      addLog(`Photo data keys: ${JSON.stringify(Object.keys(photoData))}`);
+
+      // Try every possible location HeyGen might put the image_key
+      const imageKey =
+        photoData?.image_key ||
+        photoData?.images?.[0]?.image_key ||
+        photoData?.image_keys?.[0] ||
+        photoData?.result?.[0]?.image_key ||
+        photoData?.data?.image_key ||
+        photoData?.url ||
+        photoData?.images?.[0]?.url ||
+        null;
+
+      if (!imageKey) {
+        // Log the full response so we can see exactly what came back
+        addLog(`Full response: ${JSON.stringify(photoData).slice(0, 300)}`);
+        throw new Error("No image key from HeyGen — check agent log for response details.");
+      }
       addLog("✓ Photo ready — creating avatar group…");
 
       // Create avatar group
